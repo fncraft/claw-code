@@ -1199,10 +1199,9 @@ fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> 
     validate_todos(&input.todos)?;
     let store_path = todo_store_path()?;
     let old_todos = if store_path.exists() {
-        serde_json::from_str::<Vec<TodoItem>>(
+        parse_todo_markdown(
             &std::fs::read_to_string(&store_path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?
+        )?
     } else {
         Vec::new()
     };
@@ -1220,11 +1219,8 @@ fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> 
     if let Some(parent) = store_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    std::fs::write(
-        &store_path,
-        serde_json::to_string_pretty(&persisted).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    std::fs::write(&store_path, render_todo_markdown(&persisted))
+        .map_err(|error| error.to_string())?;
 
     let verification_nudge_needed = (all_done
         && input.todos.len() >= 3
@@ -1282,7 +1278,58 @@ fn todo_store_path() -> Result<std::path::PathBuf, String> {
         return Ok(std::path::PathBuf::from(path));
     }
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-    Ok(cwd.join(".clawd-todos.json"))
+    Ok(cwd.join(".claude").join("todos.md"))
+}
+
+fn render_todo_markdown(todos: &[TodoItem]) -> String {
+    let mut lines = vec!["# Todo list".to_string(), String::new()];
+    for todo in todos {
+        let marker = match todo.status {
+            TodoStatus::Pending => "[ ]",
+            TodoStatus::InProgress => "[~]",
+            TodoStatus::Completed => "[x]",
+        };
+        lines.push(format!(
+            "- {marker} {} :: {}",
+            todo.content, todo.active_form
+        ));
+    }
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+fn parse_todo_markdown(content: &str) -> Result<Vec<TodoItem>, String> {
+    let mut todos = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("- [") else {
+            continue;
+        };
+        let mut chars = rest.chars();
+        let status = match chars.next() {
+            Some(' ') => TodoStatus::Pending,
+            Some('~') => TodoStatus::InProgress,
+            Some('x' | 'X') => TodoStatus::Completed,
+            Some(other) => return Err(format!("unsupported todo status marker: {other}")),
+            None => return Err(String::from("malformed todo line")),
+        };
+        let remainder = chars.as_str();
+        let Some(body) = remainder.strip_prefix("] ") else {
+            return Err(String::from("malformed todo line"));
+        };
+        let Some((content, active_form)) = body.split_once(" :: ") else {
+            return Err(String::from("todo line missing active form separator"));
+        };
+        todos.push(TodoItem {
+            content: content.trim().to_string(),
+            active_form: active_form.trim().to_string(),
+            status,
+        });
+    }
+    Ok(todos)
 }
 
 fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
@@ -2636,6 +2683,37 @@ mod tests {
             3
         );
         assert!(second_output["verificationNudgeNeeded"].is_null());
+    }
+
+    #[test]
+    fn todo_write_persists_markdown_in_claude_directory() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp = temp_path("todos-md-dir");
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&temp).expect("set cwd");
+
+        execute_tool(
+            "TodoWrite",
+            &json!({
+                "todos": [
+                    {"content": "Add tool", "activeForm": "Adding tool", "status": "in_progress"},
+                    {"content": "Run tests", "activeForm": "Running tests", "status": "pending"}
+                ]
+            }),
+        )
+        .expect("TodoWrite should succeed");
+
+        let persisted = std::fs::read_to_string(temp.join(".claude").join("todos.md"))
+            .expect("todo markdown exists");
+        std::env::set_current_dir(previous).expect("restore cwd");
+        let _ = std::fs::remove_dir_all(temp);
+
+        assert!(persisted.contains("# Todo list"));
+        assert!(persisted.contains("- [~] Add tool :: Adding tool"));
+        assert!(persisted.contains("- [ ] Run tests :: Running tests"));
     }
 
     #[test]

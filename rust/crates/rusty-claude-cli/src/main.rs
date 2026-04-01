@@ -1541,7 +1541,8 @@ fn status_context(
         session_path: session_path.map(Path::to_path_buf),
         loaded_config_files: runtime_config.loaded_entries().len(),
         discovered_config_files,
-        memory_file_count: project_context.instruction_files.len(),
+        memory_file_count: project_context.instruction_files.len()
+            + project_context.memory_files.len(),
         project_root,
         git_branch,
     })
@@ -1686,37 +1687,56 @@ fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
     let mut lines = vec![format!(
         "Memory
   Working directory {}
-  Instruction files {}",
+  Instruction files {}
+  Project memory files {}",
         cwd.display(),
-        project_context.instruction_files.len()
+        project_context.instruction_files.len(),
+        project_context.memory_files.len()
     )];
-    if project_context.instruction_files.is_empty() {
-        lines.push("Discovered files".to_string());
-        lines.push(
-            "  No CLAUDE instruction files discovered in the current directory ancestry."
-                .to_string(),
-        );
-    } else {
-        lines.push("Discovered files".to_string());
-        for (index, file) in project_context.instruction_files.iter().enumerate() {
-            let preview = file.content.lines().next().unwrap_or("").trim();
-            let preview = if preview.is_empty() {
-                "<empty>"
-            } else {
-                preview
-            };
-            lines.push(format!("  {}. {}", index + 1, file.path.display(),));
-            lines.push(format!(
-                "     lines={} preview={}",
-                file.content.lines().count(),
-                preview
-            ));
-        }
-    }
+    append_memory_section(
+        &mut lines,
+        "Instruction files",
+        &project_context.instruction_files,
+        "No CLAUDE instruction files discovered in the current directory ancestry.",
+    );
+    append_memory_section(
+        &mut lines,
+        "Project memory files",
+        &project_context.memory_files,
+        "No persisted project memory files discovered in .claude/memory.",
+    );
     Ok(lines.join(
         "
 ",
     ))
+}
+
+fn append_memory_section(
+    lines: &mut Vec<String>,
+    title: &str,
+    files: &[runtime::ContextFile],
+    empty_message: &str,
+) {
+    lines.push(title.to_string());
+    if files.is_empty() {
+        lines.push(format!("  {empty_message}"));
+        return;
+    }
+
+    for (index, file) in files.iter().enumerate() {
+        let preview = file.content.lines().next().unwrap_or("").trim();
+        let preview = if preview.is_empty() {
+            "<empty>"
+        } else {
+            preview
+        };
+        lines.push(format!("  {}. {}", index + 1, file.path.display()));
+        lines.push(format!(
+            "     lines={} preview={}",
+            file.content.lines().count(),
+            preview
+        ));
+    }
 }
 
 fn init_claude_md() -> Result<String, Box<dyn std::error::Error>> {
@@ -2964,7 +2984,7 @@ mod tests {
         assert!(report.contains("Memory"));
         assert!(report.contains("Working directory"));
         assert!(report.contains("Instruction files"));
-        assert!(report.contains("Discovered files"));
+        assert!(report.contains("Project memory files"));
     }
 
     #[test]
