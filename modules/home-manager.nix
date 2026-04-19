@@ -44,21 +44,27 @@ let
     else
       "";
 
+  hasApiKey     = cfg.credentials.anthropicApiKey.value    != null || cfg.credentials.anthropicApiKey.file    != null;
+  hasAuthToken  = cfg.credentials.anthropicAuthToken.value != null || cfg.credentials.anthropicAuthToken.file != null;
+  hasOpenRouter = cfg.credentials.openRouter.key.value     != null || cfg.credentials.openRouter.key.file     != null;
+  hasLlama      = cfg.llamaServer.enable;
+
+  # llama-server: claw routes through the OpenAI-compat path, which requires
+  # OPENAI_API_KEY to be non-empty even though llama-server ignores the value.
+  llamaLines = lib.optionalString hasLlama ''
+    export OPENAI_API_KEY=${lib.escapeShellArg cfg.llamaServer.apiKey}
+    export OPENAI_BASE_URL=${lib.escapeShellArg "${cfg.llamaServer.address}/v1"}
+  '';
+
   credentialLines = lib.concatStringsSep "\n" (lib.filter (s: s != "") [
     (shellLine "ANTHROPIC_API_KEY"  cfg.credentials.anthropicApiKey)
     (shellLine "ANTHROPIC_AUTH_TOKEN" cfg.credentials.anthropicAuthToken)
     (shellLine "OPENAI_API_KEY"     cfg.credentials.openRouter.key)
-    (if cfg.credentials.openRouter.key.value != null
-        || cfg.credentials.openRouter.key.file  != null
+    (if hasOpenRouter
      then ''export OPENAI_BASE_URL=${lib.escapeShellArg cfg.credentials.openRouter.baseUrl}''
      else "")
+    llamaLines
   ]);
-
-  # Validate: API key and auth token must not both be set — claw errors on
-  # that combination — and OpenRouter must not be mixed with Anthropic creds.
-  hasApiKey    = cfg.credentials.anthropicApiKey.value    != null || cfg.credentials.anthropicApiKey.file    != null;
-  hasAuthToken = cfg.credentials.anthropicAuthToken.value != null || cfg.credentials.anthropicAuthToken.file != null;
-  hasOpenRouter = cfg.credentials.openRouter.key.value   != null || cfg.credentials.openRouter.key.file     != null;
 in
 {
   options.programs.claw = {
@@ -118,6 +124,34 @@ in
         };
       };
     };
+
+    llamaServer = {
+      enable = lib.mkEnableOption "local llama-server backend via OpenAI-compat path";
+
+      address = lib.mkOption {
+        type = lib.types.str;
+        default = "http://localhost:8080";
+        description = ''
+          Base address of the running llama-server instance.
+          `OPENAI_BASE_URL` is set to `<address>/v1`.
+
+          Override if you run llama-server on a different port or host,
+          e.g. `"http://localhost:9090"`.
+        '';
+      };
+
+      apiKey = lib.mkOption {
+        type = lib.types.str;
+        default = "no-key";
+        description = ''
+          Value written to `OPENAI_API_KEY`.  llama-server does not
+          validate this, but claw requires the variable to be non-empty
+          before it will attempt the OpenAI-compat path.  The default
+          `"no-key"` is sufficient; change it only if your llama-server
+          is configured with `--api-key`.
+        '';
+      };
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -135,6 +169,14 @@ in
         message = ''
           programs.claw: `credentials.openRouter` is mutually exclusive
           with Anthropic credentials — they target different providers.
+        '';
+      }
+      {
+        assertion = !(hasLlama && (hasApiKey || hasAuthToken || hasOpenRouter));
+        message = ''
+          programs.claw: `llamaServer` is mutually exclusive with all
+          other credential options — they each set OPENAI_API_KEY /
+          OPENAI_BASE_URL or Anthropic vars and would conflict.
         '';
       }
     ];
