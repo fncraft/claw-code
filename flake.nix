@@ -20,6 +20,10 @@
 
           cargoLock.lockFile = ./rust/Cargo.lock;
 
+          # MCP stdio tests spawn child processes, which are not available
+          # in the Nix sandbox. Tests pass fine in a normal dev environment.
+          doCheck = false;
+
           # build.rs calls `git rev-parse` and `date`; both fall back to
           # "unknown" / env vars when unavailable, so no extra inputs needed.
           # SOURCE_DATE_EPOCH is set automatically by Nix for reproducibility.
