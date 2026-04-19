@@ -56,5 +56,9 @@
       overlays.default = final: _prev: {
         claw = mkClaw final;
       };
+
+      # Home-manager module: programs.claw { enable, credentials, ... }
+      homeManagerModules.default = import ./modules/home-manager.nix;
+      homeManagerModules.claw    = import ./modules/home-manager.nix;
     };
 }
